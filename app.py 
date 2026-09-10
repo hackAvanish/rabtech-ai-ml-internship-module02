@@ -1,0 +1,56 @@
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
+import joblib
+import pandas as pd
+import numpy as np
+
+# Initialize FastAPI app
+app = FastAPI(
+    title="Customer Churn Prediction API",
+    description="Production-ready REST API for real-time ML inference using FastAPI and trained champion model.",
+    version="1.0.0"
+)
+
+# Load serialized champion model
+try:
+    model = joblib.load("champion_churn_model.joblib")
+except Exception as e:
+    model = None
+
+# Define Pydantic request schema with validation
+class CustomerData(BaseModel):
+    tenure_months: int = Field(..., ge=0, description="Total duration of active subscription in months")
+    support_tickets: int = Field(..., ge=0, description="Number of support tickets logged recently")
+    monthly_spend_inr: float = Field(..., ge=0.0, description="Monthly subscription expenditure in INR")
+    last_login_days: int = Field(..., ge=0, description="Days elapsed since last login")
+    plan_type: str = Field(..., description="Subscription plan tier: Basic, Standard, or Pro")
+
+@app.get("/")
+def read_root():
+    return {"status": "healthy", "message": "Welcome to the RabTech ML Inference Service API"}
+
+@app.post("/predict")
+def predict_churn(data: CustomerData):
+    if model is None:
+        raise HTTPException(status_code=500, detail="Champion model artifact not found on server.")
+    
+    # Convert input payload to DataFrame matching training features
+    input_df = pd.DataFrame([{
+        "tenure_months": data.tenure_months,
+        "support_tickets": data.support_tickets,
+        "monthly_spend_inr": data.monthly_spend_inr,
+        "last_login_days": data.last_login_days,
+        "plan_type": data.plan_type
+    }])
+    
+    try:
+        prediction = int(model.predict(input_df)[0])
+        probability = float(model.predict_proba(input_df)[0][1]) if hasattr(model, "predict_proba") else 0.0
+        
+        return {
+            "churn_prediction": prediction,
+            "churn_probability": round(probability, 4),
+            "risk_level": "High" if probability >= 0.5 else "Low"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Inference error: {str(e)}")
